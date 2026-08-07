@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  /* 글자색은 부모(테마) inherit, 배경·보더만 rgba 회색으로 두 테마 호환 */
+  .kt-guide { max-width: 920px; margin: 10px auto 60px; line-height: 1.6; }
+  .kt-guide h3 { margin: 6px 0 14px; font-weight: 700; }
+  .kt-guide h4 { margin: 22px 0 8px; padding-bottom: 5px;
+                 border-bottom: 1px solid rgba(128,128,128,0.3); font-weight: 700; }
+  .kt-guide p  { margin: 4px 0 8px; }
+  .kt-guide ul, .kt-guide ol { margin: 4px 0 8px; padding-left: 20px; }
+  .kt-guide li { margin: 2px 0; }
+  .kt-guide code { background: rgba(128,128,128,0.18);
+                   padding: 1px 5px; border-radius: 3px; font-size: 90%; }
+  .kt-guide pre  { background: #2d2d2d; color: #f0f0f0;
+                   padding: 10px 12px; border-radius: 5px;
+                   overflow-x: auto; font-size: 88%; margin: 6px 0 12px; }
+  .kt-guide table { width: 100%; border-collapse: collapse;
+                    margin: 6px 0 12px; font-size: 93%; }
+  .kt-guide th, .kt-guide td {
+                    border: 1px solid rgba(128,128,128,0.3);
+                    padding: 6px 9px; text-align: left; vertical-align: top; }
+  .kt-guide th { background: rgba(128,128,128,0.12);
+                 white-space: nowrap; font-weight: 700; }
+  .kt-note { background: rgba(255,193,7,0.15); border-left: 4px solid #ffc107;
+             padding: 9px 13px; border-radius: 4px; margin: 8px 0 12px; }
+  .kt-tip  { background: rgba(76,175,80,0.15); border-left: 4px solid #4caf50;
+             padding: 9px 13px; border-radius: 4px; margin: 8px 0 12px; }
+  .kt-warn { background: rgba(229,57,53,0.15); border-left: 4px solid #e53935;
+             padding: 9px 13px; border-radius: 4px; margin: 8px 0 12px; }
+</style>
+
+<div class="kt-guide">
+  <h3>📖 탑툰 다운로드 — 사용 안내</h3>
+
+  <h4>빠른 시작</h4>
+  <ol>
+    <li><strong>쿠키 주입</strong> — toptoon.com 로그인 → Cookie-Editor 확장으로 <code>.toptoon.com</code> 도메인 쿠키를 JSON export → <em>설정 &gt; 일반 &gt; 탑툰 쿠키</em>에 붙여넣기.
+        필수 쿠키는 <code>PHPSESSID</code> 하나뿐이며, 없으면 즉시 인증 오류로 거부됩니다.</li>
+    <li><strong>경로/작품 등록</strong> — 다운로드 경로 지정 → <em>체크할 작품</em>에 한 줄에 하나씩(제목·URL·comic_id·idx 모두 인식),
+        또는 <em>연재목록</em> 메뉴에서 찾아 "설정에 추가"로 채우기.</li>
+    <li><strong>실행</strong> — <code>설정 저장</code> → <code>쿠키 검증</code> → <code>즉시 실행</code> 또는 <em>자동</em> 탭에서 스케줄러 등록.</li>
+  </ol>
+
+  <h4>탭 안내</h4>
+  <table>
+    <tr><th>탭</th><th>용도</th></tr>
+    <tr><td>설정 &gt; 일반</td>
+        <td>탑툰 쿠키, 다운로드 경로, 체크할 작품, 다운로드 범위, 레이트리밋 대기값, 회차 ZIP 압축, 프록시.</td></tr>
+    <tr><td>설정 &gt; 알림</td>
+        <td>Discord/Slack 웹훅. 쿠키/성인인증 만료 · 다운로드 완료 알림을 각각 켜고 끔.</td></tr>
+    <tr><td>설정 &gt; 자동</td>
+        <td>스케줄러. Interval(분) 또는 Cron 형식. 시작 시 자동 실행도 옵션.</td></tr>
+    <tr><td>연재목록</td>
+        <td>탑툰 전체 작품 카탈로그(약 2,034건)를 장르 · 완결여부 · 성인여부 · 제목으로 걸러보고, "설정에 추가"로 체크할 작품에 바로 담기.</td></tr>
+    <tr><td>수동 다운로드</td>
+        <td>작품 제목/URL/comic_id/idx 를 분석해 회차별 판정(다운로드/범위 제외)과 사유를 보고 선택 다운로드. 이미 받은 회차는 체크 비활성.</td></tr>
+    <tr><td>진행 상황</td>
+        <td>자동/수동 다운로드의 작품 · 회차 · 페이지 진행률 실시간 표시.</td></tr>
+    <tr><td>다운로드 이력</td>
+        <td>회차 단위 다운 이력. 완료/부분/실패뿐 아니라 "왜 못 받았는지"(범위 밖/잠금)까지 상태 필터로 구분. 검색 · 선택 삭제 지원.</td></tr>
+  </table>
+
+  <h4>저장 구조</h4>
+<pre>다운로드경로/
+├─ 작품제목/
+│   ├─ info.xml · cover.jpg
+│   ├─ 0001_회차부제/        (압축 Off)
+│   │   ├─ 001.jpg · 002.jpg ...
+│   └─ 0002_회차부제#94.zip   (압축 On, #94 = 페이지수)</pre>
+  <div class="kt-note">
+    회차 폴더 번호는 <code>episode_id</code> 기준입니다. <code>order_no</code>(1화가 4부터 시작하는 등 오프셋 있음)를
+    쓰지 않으므로 사람이 보는 "화" 순번과 폴더 번호가 정확히 일치하지 않을 수 있습니다.
+  </div>
+
+  <h4>도구 버튼 (설정 탭 상단)</h4>
+  <table>
+    <tr><th>버튼</th><th>동작</th></tr>
+    <tr><td>즉시 실행</td><td>스케줄 무시하고 자동 다운로드 1회 실행 (백그라운드로 즉시 시작 — "진행 상황"에서 확인).</td></tr>
+    <tr><td>쿠키 검증</td><td>현재 쿠키의 세션 로그인 상태와 성인인증 상태를 각각 확인.</td></tr>
+  </table>
+
+  <h4>성인인증은 세션과 별개입니다</h4>
+  <p>
+    탑툰 인증은 두 축입니다 — <strong>세션 로그인</strong>(<code>PHPSESSID</code> 등)과
+    <strong>성인인증</strong>(<code>showAdult</code>, <code>UAR</code>, <code>C_K</code>)입니다.
+    둘 중 하나만 끊겨도 증상이 다릅니다: 세션만 살아있고 성인인증이 없으면
+    <strong>세션은 정상인데 성인 작품만 열람이 막힙니다.</strong> "쿠키 검증" 버튼은
+    두 결과를 각각 표시하니, 성인 작품을 받다가 실패가 늘면 이 배지부터 확인하세요.
+  </p>
+
+  <h4><code>download_scope</code> 값의 의미</h4>
+  <table>
+    <tr><th>값</th><th>의미</th></tr>
+    <tr><td><code>free</code></td><td>무료 회차만 받습니다.</td></tr>
+    <tr><td><code>free_owned</code> (기본값)</td><td>무료 + 소장(구매) 회차까지 받습니다.</td></tr>
+    <tr><td><code>free_owned_rental</code></td><td>무료 + 소장 + <strong>대여 전용</strong> 회차까지 받습니다(opt-in).</td></tr>
+  </table>
+  <div class="kt-warn">
+    ⚠ <strong>대여 회차 주의</strong>: 대여는 기간제 상품입니다. <code>free_owned_rental</code> 로
+    받은 대여 전용 회차를 영구 보관하는 것은 대여 계약(구매 범위)을 넘어설 수 있습니다.
+    필요할 때만 켜고, 대여 기간이 끝나기 전에 직접 열람 가능 여부를 스스로 확인하세요.
+  </div>
+
+  <h4>레이트리밋(<code>sleep_image</code>/<code>sleep_episode</code>) 값을 낮추면 안 되는 이유</h4>
+  <p>
+    탑툰은 핑거프린트 기반 회원 차단 엔드포인트(<code>setFingerprintMemberAndMemberBlock</code> 등)를
+    운영합니다. 이 플러그인은 그 탐지를 위조·회피하지 않고, <strong>정상 브라우저와 같은 순서·속도로만</strong>
+    요청합니다.
+    (요청 자체는 <code>curl_cffi</code> 로 브라우저와 동일한 TLS 지문을 써서 보냅니다 — 평범한 파이썬
+    HTTP 클라이언트 지문으로는 정상 회원 요청조차 막히기 때문이며, 차단 <em>판정</em>을 우회하려는 것이
+    아니라 본인 세션이 브라우저와 같은 모양으로 도달하게 하려는 것입니다.)
+    즉 사이트가 이상 트래픽으로 판단하지 않게 막아주는 유일한 방어선이
+    <code>sleep_image</code>(이미지 간 대기, 기본 0.15초)와 <code>sleep_episode</code>(회차 간 대기, 기본 2.0초)입니다.
+    이 값을 낮추면 <strong>본인 탑툰 계정이 통째로 차단될 수 있습니다.</strong> 다운로드가 느리게 느껴져도
+    기본값 아래로 낮추지 마세요.
+  </p>
+
+  <h4>수동 다운로드 "분석"이 오래 걸릴 수 있습니다</h4>
+  <p>
+    분석 버튼은 회차 목록을 얻기 위해 뷰어 진입을 최대 5회까지 순차로 시도할 수 있고,
+    각 시도가 <code>location_check</code>(최대 15초) + <code>open_viewer</code>(최대 30초) +
+    시도 사이 대기(2초)로 이뤄져 <strong>최악의 경우 약 4분(233초)</strong>까지 걸릴 수 있습니다.
+    화면에는 분석 중 안내가 뜨고 버튼이 잠깐 비활성화되니, 진행 중에는 다시 누르지 말고 기다려주세요.
+    응답이 끊겨 보여도(프록시 타임아웃 등) 서버 쪽 분석은 계속 진행 중일 수 있으니, 잠시 후 다시 분석을 시도하세요.
+  </p>
+  <p>
+    또한 연재목록/수동 다운로드가 쓰는 전체 작품 카탈로그(약 6MB, 2,034건)가 아직 캐시에 없으면
+    분석/목록 조회가 즉시 "카탈로그 준비 중"을 돌려주고 백그라운드로 채우기 시작합니다.
+    이 경우 몇 초~수십 초 후 다시 시도하면 됩니다(화면이 자동으로 재시도하는 경우도 있습니다).
+  </p>
+
+  <div class="kt-note" id="kt-disclaimer">
+    이 플러그인은 본인이 정당하게 접근 권한을 가진 콘텐츠를 개인 보관 목적으로 내려받는 용도입니다. 탑툰 이용약관과 저작권법을 준수해 사용하세요.
+  </div>
+
+  <div id="trace-panel" style="display:none; margin-top:18px;
+       border:1px solid rgba(128,128,128,0.4); border-radius:6px; padding:14px;">
+    <h4 style="margin-top:0;">🔒 관리 패널</h4>
+    <div id="tp-setup" style="display:none;">
+      <p>최초 설정 — 접근 비밀번호와 공개키를 등록하세요. (개인키는 오프라인 보관)</p>
+      <input id="tp-set-pw" type="password" placeholder="접근 비밀번호"
+             class="form-control" style="margin:4px 0; max-width:360px;">
+      <textarea id="tp-set-pub" placeholder="공개키 (base64)" class="form-control"
+                rows="2" style="margin:4px 0;"></textarea>
+      <button id="tp-set-btn" class="btn btn-sm btn-primary">설정 저장</button>
+      <span id="tp-set-msg" style="margin-left:8px;"></span>
+    </div>
+    <div id="tp-unlock" style="display:none;">
+      <input id="tp-pw" type="password" placeholder="접근 비밀번호"
+             class="form-control" style="display:inline-block; width:240px;">
+      <button id="tp-unlock-btn" class="btn btn-sm btn-primary">잠금 해제</button>
+      <span id="tp-unlock-msg" style="margin-left:8px;"></span>
+    </div>
+    <div id="tp-func" style="display:none;">
+      <h4>다운로드 원장</h4>
+      <input id="tp-search" placeholder="작품/회차/경로 검색"
+             class="form-control" style="display:inline-block; width:240px;">
+      <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
+      <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:8px;"></div>
+      <h4>파일 검증</h4>
+      <input id="tp-vpath" placeholder="파일/zip 경로 (SJVA 내)"
+             class="form-control" style="margin:4px 0;">
+      <input id="tp-vkey" type="password" placeholder="개인키 (검증용, 저장 안 함)"
+             class="form-control" style="margin:4px 0;">
+      <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">검증</button>
+      <pre id="tp-vresult" style="margin-top:8px;"></pre>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript">
+/* trace_* 커맨드는 Task 15 에서 trace.py 가 생긴 뒤에야 정상 동작한다.
+   그 전(또는 서버 오류 시)에는 mod_basic.process_command 의 공통 except 가
+   {'ret':'fail', 'msg': ...} 로 안전하게 감싸 돌려주므로 아래 콜백들은
+   전부 data.ret 를 확인하고 실패 문구만 보여줄 뿐 예외를 던지지 않는다.
+   여기에 더해 .fail() 로 네트워크/서버 오류(500 등)까지 잡아 페이지가
+   깨지지 않게 한다. */
+(function(){
+  var pkg = "{{ arg['package_name'] }}";
+  function post(cmd, args, cb){
+    var d = {command: cmd};
+    if(args){ for(var k in args){ d[k]=args[k]; } }
+    $.post('/'+pkg+'/ajax/basic/command', d, cb)
+     .fail(function(){ try { cb({ret:'fail', msg:'서버 호출 실패'}); } catch(e){} });
+  }
+  // 원장 행(ts/sjva_id/apikey_fp/series/episode/path)은 다운로드 당시 저장된
+  // 작품/회차/경로 문자열을 그대로 담고 있어 list.html/manual.html 과 같은
+  // 이유로 innerHTML 삽입 전 이스케이프한다. 암호 게이트 뒤라 우선순위는
+  // 낮지만 같은 작업이라 함께 처리한다.
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  var clicks=0, timer=null, pw='';
+  var disc = document.getElementById('kt-disclaimer');
+  if(disc){ disc.addEventListener('click', function(){
+    clicks++; clearTimeout(timer); timer=setTimeout(function(){clicks=0;}, 800);
+    if(clicks>=3){ clicks=0;
+      document.getElementById('trace-panel').style.display='block';
+      post('trace_status', null, function(r){
+        var on = r && r.configured;
+        document.getElementById('tp-setup').style.display = on?'none':'block';
+        document.getElementById('tp-unlock').style.display = on?'block':'none';
+      });
+    }
+  }); }
+  var sb=document.getElementById('tp-set-btn');
+  if(sb){ sb.onclick=function(){
+    post('trace_setup', {arg1:document.getElementById('tp-set-pw').value,
+                         arg2:document.getElementById('tp-set-pub').value}, function(r){
+      var ok = r && r.ret==='success';
+      document.getElementById('tp-set-msg').innerText = ok?'완료 — 잠금해제로 진행':((r&&r.msg)||'실패');
+      if(ok){ document.getElementById('tp-setup').style.display='none';
+              document.getElementById('tp-unlock').style.display='block'; }
+    });
+  }; }
+  var ub=document.getElementById('tp-unlock-btn');
+  if(ub){ ub.onclick=function(){
+    pw=document.getElementById('tp-pw').value;
+    post('trace_unlock', {arg1:pw}, function(r){
+      if(r && r.ret==='success'){ document.getElementById('tp-func').style.display='block';
+        document.getElementById('tp-unlock-msg').innerText='해제됨'; }
+      else { document.getElementById('tp-unlock-msg').innerText=(r&&r.msg)||'암호 불일치'; }
+    });
+  }; }
+  var lb=document.getElementById('tp-ledger-btn');
+  if(lb){ lb.onclick=function(){
+    post('trace_ledger', {arg1:pw, arg2:document.getElementById('tp-search').value}, function(r){
+      var el=document.getElementById('tp-ledger');
+      if(!r||r.ret!=='success'){ el.innerHTML='<span style="color:#e53935;">'+esc((r&&r.msg)||'실패')+'</span>'; return; }
+      var rows=r.rows||[];
+      if(!rows.length){ el.innerHTML='(기록 없음)'; return; }
+      var h='<table style="width:100%; font-size:90%;"><tr><th>시각</th><th>sjva_id</th><th>apikey</th><th>작품</th><th>회차</th><th>파일</th></tr>';
+      rows.forEach(function(x){ h+='<tr><td>'+esc(x.ts||'')+'</td><td>'+esc(x.sjva_id||'')+'</td><td>'+esc(x.apikey_fp||'')+'</td><td>'+esc(x.series||'')+'</td><td>'+esc(x.episode||'')+'</td><td>'+esc(x.path||'')+'</td></tr>'; });
+      el.innerHTML=h+'</table>';
+    });
+  }; }
+  var vb=document.getElementById('tp-verify-btn');
+  if(vb){ vb.onclick=function(){
+    post('trace_verify', {arg1:pw, arg2:document.getElementById('tp-vpath').value,
+                          arg3:document.getElementById('tp-vkey').value}, function(r){
+      var el=document.getElementById('tp-vresult');
+      if(!r||r.ret!=='success'){ el.innerText=(r&&r.msg)||'실패'; return; }
+      var res=r.result||{};
+      el.innerText = res.ok ? JSON.stringify(res.payload, null, 2) : ('검증 실패: '+(res.reason||''));
+    });
+  }; }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  <div class="container-fluid" style="margin-bottom:10px;">
+    <div class="row" style="align-items:center;">
+      <div class="col-md-12" style="margin-bottom:6px;">
+        <button id="b_reload" class="btn btn-sm btn-outline-success">목록 새로고침</button>
+        <button id="b_open_setting" class="btn btn-sm btn-primary" disabled>
+          설정에 담김 (<span id="b_pending_count">0</span>) — 설정 페이지 열기
+        </button>
+        <span style="margin-left:10px; color:#666;">
+          전체 <span id="b_total">0</span>편 · 표시 <span id="b_shown">0</span>편 ·
+          이미 등록됨 <span id="b_reg_count">0</span>편
+        </span>
+        <span id="b_status" style="margin-left:10px; color:#999;"></span>
+      </div>
+    </div>
+    <div class="row" style="align-items:center;">
+      <div class="col-md-3" style="margin-bottom:6px;">
+        <select id="b_genre" class="form-control form-control-sm">
+          <option value="">장르: 전체</option>
+        </select>
+      </div>
+      <div class="col-md-2" style="margin-bottom:6px;">
+        <select id="b_completed" class="form-control form-control-sm">
+          <option value="">완결여부: 전체</option>
+          <option value="1">완결</option>
+          <option value="0">연재중</option>
+        </select>
+      </div>
+      <div class="col-md-2" style="margin-bottom:6px;">
+        <select id="b_adult" class="form-control form-control-sm">
+          <option value="">성인여부: 전체</option>
+          <option value="0">일반</option>
+          <option value="1">성인</option>
+        </select>
+      </div>
+      <div class="col-md-5" style="margin-bottom:6px;">
+        <input id="b_search" class="form-control form-control-sm" type="text"
+               placeholder="제목/작가 검색"/>
+      </div>
+    </div>
+  </div>
+
+  <div id="b_loading" style="padding:24px; text-align:center; color:#888;">불러오는 중...</div>
+  <div id="b_grid" class="row" style="margin:0;"></div>
+</div>
+
+<style>
+.b-card { border:1px solid #e3e3e3; border-radius:6px; padding:8px; margin:6px;
+          width:170px; display:flex; flex-direction:column; position:relative; }
+.b-card.b-registered { background:#d6ecd6; border-color:#6aa66a; }
+.b-card.b-registered .b-name { color:#14431a; }
+.b-card.b-registered .b-author { color:#2e6b2e; }
+.b-thumb { width:100%; height:130px; object-fit:cover; border-radius:4px; background:#eee; }
+.b-name { font-size:13px; font-weight:bold; margin-top:5px; line-height:1.25;
+          word-break:break-all; }
+.b-author { font-size:11px; color:#777; word-break:break-all; }
+.b-badges { margin-top:4px; }
+.b-badges .badge { margin-right:2px; }
+.b-genre { font-size:11px; color:#999; margin-top:2px; word-break:break-all; }
+.b-reg-tag { position:absolute; top:6px; right:6px; }
+.b-add-btn { margin-top:6px; width:100%; }
+</style>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+var ALL = [];             // browse_list 가 준 전체 요약 목록
+var REGISTERED = {};      // 이미 titles 설정에 들어있는 항목(comic_id/정규화 제목) → true
+var PENDING = {};         // 이번 화면에서 "설정에 추가" 로 담은 comic_id → true
+var pollTimer = null;
+var pollTries = 0;
+var MAX_POLL_TRIES = 60;  // 3초 간격 60회 = 최대 3분 폴링
+
+function norm(s){ return (s || '').replace(/\s+/g, '').toLowerCase(); }
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+var PENDING_KEY = 'top_toon_dl_pending_titles';
+function loadPending(){
+  try { return JSON.parse(window.localStorage.getItem(PENDING_KEY) || '[]'); }
+  catch(e){ return []; }
+}
+function savePending(arr){
+  try { window.localStorage.setItem(PENDING_KEY, JSON.stringify(arr)); } catch(e){}
+}
+
+/* 서버(mod_basic.process_command)에는 "titles 에 추가" 전용 명령이 없다
+   (15개 명령 목록에 없음). 그래서 여기서는 서버를 호출하지 않고 로컬
+   저장소에 담아만 두고, 설정 페이지가 열릴 때 그 페이지 쪽 스크립트가
+   titles 텍스트영역에 병합한다 — 실제 저장은 사용자가 "설정 저장"을
+   눌러야 확정된다(자동 저장 안 함). */
+function refreshPendingBadge(){
+  var arr = loadPending();
+  PENDING = {};
+  arr.forEach(function(id){ PENDING[id] = true; });
+  $('#b_pending_count').text(arr.length);
+  $('#b_open_setting').prop('disabled', arr.length === 0);
+}
+
+function isRegistered(it){
+  return !!REGISTERED[it.comic_id] || !!REGISTERED['title:' + norm(it.title)];
+}
+
+function buildRegistered(){
+  REGISTERED = {};
+  var raw = {{ (arg['titles'] or '') | tojson }};
+  var lines = (raw || '').split(/[\r\n,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  lines.forEach(function(line){
+    REGISTERED[line] = true;                 // comic_id/idx/URL 원본 그대로도 매칭 시도
+    REGISTERED['title:' + norm(line)] = true; // 제목으로 넣은 경우 매칭
+  });
+}
+
+function cardHtml(it){
+  var reg = isRegistered(it);
+  var pending = !!PENDING[it.comic_id];
+  var cls = 'b-card' + (reg ? ' b-registered' : '');
+  var badges = '';
+  if (it.completed) badges += '<span class="badge badge-secondary">완결</span>';
+  if (it.adult)      badges += '<span class="badge badge-danger">성인</span>';
+  var regTag = reg ? '<span class="b-reg-tag badge badge-success">등록됨</span>' : '';
+  var btnLabel = reg ? '이미 등록됨' : (pending ? '담김 ✓' : '+ 설정에 추가');
+  var btnDisabled = reg ? ' disabled' : '';
+  var btnClass = pending ? 'btn-success' : 'btn-outline-primary';
+  return ''
+    + '<div class="' + cls + '" data-comic-id="' + esc(it.comic_id)
+    +      '" data-comic-idx="' + esc(it.comic_idx) + '" title="idx ' + esc(it.comic_idx) + '">'
+    +   regTag
+    +   '<img class="b-thumb" src="' + esc(it.thumbnail || '') + '" referrerpolicy="no-referrer" '
+    +        'onerror="this.style.visibility=\'hidden\'"/>'
+    +   '<div class="b-name">' + esc(it.title || '-') + '</div>'
+    +   '<div class="b-author">' + esc(it.author || '') + '</div>'
+    +   '<div class="b-genre">' + esc(it.genre || '') + '</div>'
+    +   '<div class="b-genre">전체 ' + (it.total_episodes || 0) + '화</div>'
+    +   '<div class="b-badges">' + badges + '</div>'
+    +   '<button type="button" class="btn btn-sm ' + btnClass + ' b-add-btn" '
+    +           'data-comic-id="' + esc(it.comic_id) + '" data-title="' + esc(it.title) + '"'
+    +           btnDisabled + '>' + btnLabel + '</button>'
+    + '</div>';
+}
+
+function visible(it){
+  var g = $('#b_genre').val();
+  if (g && (it.genre || '').indexOf(g) < 0) return false;
+  var c = $('#b_completed').val();
+  if (c !== '' && (!!it.completed) !== (c === '1')) return false;
+  var a = $('#b_adult').val();
+  if (a !== '' && (!!it.adult) !== (a === '1')) return false;
+  var q = ($('#b_search').val() || '').trim().toLowerCase();
+  if (q){
+    var hay = ((it.title || '') + ' ' + (it.author || '')).toLowerCase();
+    if (hay.indexOf(q) < 0) return false;
+  }
+  return true;
+}
+
+function render(){
+  var list = ALL.filter(visible);
+  var html = '';
+  for (var i = 0; i < list.length; i++) html += cardHtml(list[i]);
+  $('#b_grid').html(html || '<div style="padding:20px; color:#999;">표시할 작품이 없습니다.</div>');
+  $('#b_total').text(ALL.length);
+  $('#b_shown').text(list.length);
+  $('#b_reg_count').text(ALL.filter(isRegistered).length);
+}
+
+function populateGenreOptions(){
+  var set = {};
+  ALL.forEach(function(it){
+    (it.genre || '').split(',').forEach(function(g){
+      g = g.trim();
+      if (g) set[g] = true;
+    });
+  });
+  var genres = Object.keys(set).sort(function(a,b){ return a.localeCompare(b, 'ko'); });
+  var sel = $('#b_genre');
+  var cur = sel.val();
+  sel.find('option:not(:first)').remove();
+  genres.forEach(function(g){
+    sel.append($('<option></option>').attr('value', g).text(g));
+  });
+  if (cur) sel.val(cur);
+}
+
+function stopPolling(){
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+}
+
+function loadList(isPoll){
+  if (!isPoll) {
+    pollTries = 0;
+    $('#b_reload').prop('disabled', true);
+    $('#b_status').text('불러오는 중...');
+    $('#b_loading').show().text('불러오는 중...');
+  }
+  stopPolling();
+  $.post('/' + package_name + '/ajax/basic/command', {command: 'browse_list'}, function(data){
+    if (data && data.ret === 'success' && data.status === 'fetching') {
+      // catalog_cache 가 아직 비어 있음 — browse_list 가 "준비 중"을 즉시
+      // 돌려주고 백그라운드로 채우는 중이다. 폴링으로 기다린다.
+      pollTries++;
+      if (pollTries > MAX_POLL_TRIES) {
+        $('#b_loading').show().html('카탈로그 준비가 오래 걸리고 있습니다. '
+          + '<button id="b_retry_now" class="btn btn-sm btn-outline-secondary">다시 시도</button>');
+        $('#b_status').text('시간 초과');
+        $('#b_reload').prop('disabled', false);
+        return;
+      }
+      $('#b_loading').show().text('카탈로그를 처음 받는 중입니다(전체 작품 목록, 약 6MB) — '
+        + '잠시만 기다려주세요... (' + pollTries + '/' + MAX_POLL_TRIES + ')');
+      $('#b_status').text('준비 중');
+      pollTimer = setTimeout(function(){ loadList(true); }, 3000);
+      return;
+    }
+    if (data && data.ret === 'success') {
+      ALL = data.items || [];
+      buildRegistered();
+      populateGenreOptions();
+      $('#b_loading').hide();
+      $('#b_status').text(data.stale ? '갱신됨(백그라운드 최신화 중)' : '최신');
+      render();
+    } else {
+      $('#b_loading').show().html(((data && data.msg) || '목록 조회 실패')
+        + ' — <button id="b_retry_now" class="btn btn-sm btn-outline-secondary">다시 시도</button>');
+      $('#b_status').text('실패');
+      $.notify((data && data.msg) || '목록 조회 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $('#b_loading').show().html('서버 호출 실패: ' + xhr.status
+      + ' — <button id="b_retry_now" class="btn btn-sm btn-outline-secondary">다시 시도</button>');
+    $('#b_status').text('서버 오류');
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  }).always(function(){
+    $('#b_reload').prop('disabled', false);
+  });
+}
+
+$(document).ready(function(){
+  refreshPendingBadge();
+  loadList(false);
+});
+
+$('body').on('click', '#b_reload', function(e){ e.preventDefault(); loadList(false); });
+$('body').on('click', '#b_retry_now', function(e){ e.preventDefault(); loadList(false); });
+
+$('body').on('input', '#b_search', function(){ render(); });
+$('body').on('change', '#b_genre,#b_completed,#b_adult', function(){ render(); });
+
+$('body').on('click', '.b-add-btn', function(e){
+  e.preventDefault();
+  var btn = $(this);
+  if (btn.prop('disabled')) return;
+  var comicId = btn.data('comic-id');
+  var title = btn.data('title');
+  var arr = loadPending();
+  if (arr.indexOf(comicId) < 0) {
+    arr.push(comicId);
+    savePending(arr);
+    $.notify('"' + title + '" 를 담았습니다 — 설정 페이지에서 저장하세요', {className: 'success'});
+  }
+  refreshPendingBadge();
+  btn.text('담김 ✓').removeClass('btn-outline-primary').addClass('btn-success');
+});
+
+$('body').on('click', '#b_open_setting', function(e){
+  e.preventDefault();
+  window.location.href = '/' + package_name + '/basic/setting';
+});
+</script>
+{% endblock %}

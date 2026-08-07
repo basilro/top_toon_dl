@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  <h4 style="margin-top:10px;">자동 다운로드 (스케줄/즉시 실행)</h4>
+  <div class="container-fluid" style="border:1px solid #ddd; border-radius:4px; padding:10px; margin-bottom:20px;">
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>상태:</strong> <span id="a_status">-</span></div>
+      <div class="col-md-10"><span id="a_message" style="color:#666;"></span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>시작:</strong></div>
+      <div class="col-md-10"><span id="a_started">-</span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>작품 진행:</strong></div>
+      <div class="col-md-10">
+        <span id="a_comics_done">0</span> / <span id="a_comics_total">0</span>
+        (다운 <span id="a_dl">0</span>, 스킵 <span id="a_sk">0</span>, 실패 <span id="a_fa">0</span>)
+        <div class="progress" style="height:10px; margin-top:4px;">
+          <div id="a_pbar" class="progress-bar" role="progressbar" style="width:0%;">0%</div>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>현재 작품:</strong></div>
+      <div class="col-md-10"><span id="a_cur_comic">-</span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>현재 회차:</strong></div>
+      <div class="col-md-10">
+        <span id="a_cur_ep">-</span>
+        <small style="color:#888;">(<span id="a_pages_done">0</span> / <span id="a_pages_total">0</span> 페이지)</small>
+        <div class="progress" style="height:8px; margin-top:4px;">
+          <div id="a_pgbar" class="progress-bar bg-info" role="progressbar" style="width:0%;"></div>
+        </div>
+        <small style="color:#999;">
+          참고: 자동/수동 다운로드가 같은 다운로드 엔진을 공유합니다 — 수동 다운로드가
+          도는 중에는 이 페이지 진행률에 수동 다운로드 값이 잠깐 섞여 보일 수 있습니다.
+          작품/회차 단위 진행은 아래 "수동 다운로드" 패널을 기준으로 보세요.
+        </small>
+      </div>
+    </div>
+  </div>
+
+  <h4>수동 다운로드</h4>
+  <div class="container-fluid" style="border:1px solid #ddd; border-radius:4px; padding:10px;">
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>상태:</strong> <span id="m_status">-</span></div>
+      <div class="col-md-10"><span id="m_message" style="color:#666;"></span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>시작:</strong></div>
+      <div class="col-md-4"><span id="m_started">-</span></div>
+      <div class="col-md-2"><strong>종료:</strong></div>
+      <div class="col-md-4"><span id="m_finished">-</span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>작품:</strong></div>
+      <div class="col-md-10"><span id="m_comic">-</span></div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>회차 진행:</strong></div>
+      <div class="col-md-10">
+        <span id="m_done">0</span> / <span id="m_total">0</span>
+        (완료 <span id="m_completed">0</span>, 스킵 <span id="m_skipped">0</span>, 실패 <span id="m_failed">0</span>)
+        <div class="progress" style="height:10px; margin-top:4px;">
+          <div id="m_pbar" class="progress-bar" role="progressbar" style="width:0%;">0%</div>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="padding:4px 0;">
+      <div class="col-md-2"><strong>현재 회차:</strong></div>
+      <div class="col-md-10">
+        <span id="m_cur_ep">-</span>
+        <small style="color:#888;">(<span id="m_pages_done">0</span> / <span id="m_pages_total">0</span> 페이지)</small>
+        <div class="progress" style="height:8px; margin-top:4px;">
+          <div id="m_pgbar" class="progress-bar bg-info" role="progressbar" style="width:0%;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+
+function fmtTime(s){
+  if(!s) return '-';
+  return String(s).replace('T', ' ').substr(0, 19);
+}
+function pct(done, total){
+  if(!total || total <= 0) return 0;
+  return Math.floor(done * 100 / total);
+}
+
+/* 자동/수동 다운로드 진행은 status_progress 커맨드(worker.get_auto_state() +
+   manual_worker.get_state())를 폴링해서만 표시한다. do_action()/즉시 실행은
+   백그라운드 스레드만 띄우고 곧장 반환하므로 F.scheduler.is_running() 은
+   실행 시작 수 밀리초 뒤에 이미 False 가 된다 — is_running 은 여기서 절대
+   상태 표시에 쓰지 않는다. */
+function applyAuto(a){
+  $('#a_status').text(a.status || '-');
+  $('#a_message').text(a.message || '');
+  $('#a_started').text(fmtTime(a.started_at));
+  $('#a_comics_done').text(a.comics_done || 0);
+  $('#a_comics_total').text(a.comics_total || 0);
+  var s = a.summary || {};
+  $('#a_dl').text(s.downloaded || 0);
+  $('#a_sk').text(s.skipped || 0);
+  $('#a_fa').text(s.failed || 0);
+  var p = pct(a.comics_done, a.comics_total);
+  $('#a_pbar').css('width', p + '%').text(p + '%');
+  if(a.status === 'running') $('#a_pbar').addClass('progress-bar-striped progress-bar-animated bg-success');
+  else $('#a_pbar').removeClass('progress-bar-animated');
+  $('#a_cur_comic').text(a.current_comic || '-');
+  $('#a_cur_ep').text(a.current_episode || '-');
+  $('#a_pages_done').text(a.pages_done || 0);
+  $('#a_pages_total').text(a.pages_total || 0);
+  var pp = pct(a.pages_done, a.pages_total);
+  $('#a_pgbar').css('width', pp + '%');
+}
+
+function applyManual(m){
+  $('#m_status').text(m.status || '-');
+  $('#m_message').text(m.message || '');
+  $('#m_started').text(fmtTime(m.started_at));
+  $('#m_finished').text(fmtTime(m.finished_at));
+  $('#m_comic').text(m.comic_name || '-');
+  var total = m.total_to_download || 0;
+  var done = (m.completed || 0) + (m.skipped || 0) + (m.failed || 0);
+  $('#m_done').text(done);
+  $('#m_total').text(total);
+  $('#m_completed').text(m.completed || 0);
+  $('#m_skipped').text(m.skipped || 0);
+  $('#m_failed').text(m.failed || 0);
+  var p = pct(done, total);
+  $('#m_pbar').css('width', p + '%').text(p + '%');
+  if(m.status === 'running') $('#m_pbar').addClass('progress-bar-striped progress-bar-animated bg-success');
+  else $('#m_pbar').removeClass('progress-bar-animated');
+  var idx = m.current_index;
+  var eps = m.episodes || [];
+  if(idx >= 0 && idx < eps.length){
+    var e = eps[idx];
+    $('#m_cur_ep').text(e.title || ('episode_id ' + e.episode_id) || '-');
+    $('#m_pages_done').text(e.pages_done || 0);
+    $('#m_pages_total').text(e.pages_total || 0);
+    var pp = pct(e.pages_done, e.pages_total);
+    $('#m_pgbar').css('width', pp + '%');
+  } else {
+    $('#m_cur_ep').text('-');
+    $('#m_pages_done').text(0);
+    $('#m_pages_total').text(0);
+    $('#m_pgbar').css('width', '0%');
+  }
+}
+
+function poll(){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'status_progress'},
+         function(data){
+    if(data && data.ret === 'success'){
+      applyAuto(data.auto || {});
+      applyManual(data.manual || {});
+    }
+  }).fail(function(){ /* 다음 폴링에서 재시도 — 조용히 넘어간다 */ });
+}
+
+$(document).ready(function(){
+  poll();
+  setInterval(poll, 1500);
+});
+</script>
+{% endblock %}

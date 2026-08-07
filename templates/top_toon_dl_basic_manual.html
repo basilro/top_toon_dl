@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  {{ macros.setting_input_text_and_buttons('manual_url', '탑툰 작품 제목 / URL / comic_id / idx',
+      [['manualAnalyzeBtn',  '분석'],
+       ['manualDownloadBtn', '선택 다운로드'],
+       ['manualCancelBtn',   '취소']],
+      value='',
+      desc=['예) 작품 제목: 섹시한 여자 (정확한 제목, 부분일치는 인식 안 함)',
+            '예) 작품 전체: https://toptoon.com/comic/ep_list/sexy_woman',
+            '예) sexy_woman (comic_id 슬러그)',
+            '예) 11929 (idx 숫자만)',
+            '분석 → 받을 회차 체크 → 선택 다운로드. 범위(download_scope) 안에 들고 미수신인 회차만 선택 가능.',
+            '⚠ 분석은 뷰어 진입을 최대 5회까지 순차 시도할 수 있어 수 분(최악 약 4분) 걸릴 수 있습니다. 분석 중 다시 누르지 마세요.']) }}
+
+  <div class="container-fluid" style="margin-top:10px;">
+    <div class="row" style="padding:6px 0;">
+      <div class="col-md-3"><strong>상태:</strong> <span id="m_status">-</span></div>
+      <div class="col-md-9"><span id="m_message" style="color:#666;"></span></div>
+    </div>
+    <div class="row" style="padding:6px 0;">
+      <div class="col-md-3"><strong>작품:</strong> <span id="m_series">-</span></div>
+      <div class="col-md-9">
+        <strong>진행:</strong> <span id="m_done">0</span> / <span id="m_total">0</span>
+        (완료 <span id="m_completed">0</span>, 스킵 <span id="m_skipped">0</span>, 실패 <span id="m_failed">0</span>)
+        <div class="progress" style="height:14px; margin-top:4px;">
+          <div id="m_progress_bar" class="progress-bar progress-bar-striped" role="progressbar"
+               style="width:0%;">0%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{ macros.m_hr_head_top() }}
+  {{ macros.m_row_start('0') }}
+  <div class="col-sm-1" style="text-align:center;"><input type="checkbox" id="m_check_all" title="전체 선택"/></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>#</strong></div>
+  <div class="col-sm-3"><strong>회차</strong></div>
+  <div class="col-sm-2" style="text-align:center;"><strong>판정</strong></div>
+  <div class="col-sm-3"><strong>사유</strong></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>진행</strong></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>상태</strong></div>
+  {{ macros.m_row_end() }}
+  {{ macros.m_hr_head_bottom() }}
+  <div id="m_episodes"></div>
+</div>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+var pollTimer = null;
+// 분석 직후엔 체크박스를 활성으로 유지해야 하므로, 폴링(applyState)이 회차 목록을
+// 비활성으로 다시 그리지 않게 막는 플래그. 다운로드 시작 시 false 로 푼다.
+var interactiveMode = false;
+var analyzeInFlight = false;
+var _catalogAutoRetried = false;
+
+function decisionBadge(d){
+  var m = {'download':['success','다운로드'],'skip_scope':['secondary','범위 제외']};
+  var v = m[d] || ['light', d || '-'];
+  return '<span class="badge badge-' + v[0] + '">' + v[1] + '</span>';
+}
+function stateBadge(s){
+  var m = {'pending':['light','대기'],'downloading':['info','다운중'],
+           'completed':['success','완료'],'have':['primary','이미받음'],'skipped':['secondary','스킵'],
+           'failed':['danger','실패'],'excluded':['light','제외']};
+  var v = m[s] || ['light', s || '-'];
+  return '<span class="badge badge-' + v[0] + '">' + v[1] + '</span>';
+}
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+// interactive=true (분석 직후): 체크박스 활성. selectable = decision==='download' && !already.
+// interactive=false (다운 진행/완료): 체크박스 비활성, 선택됐던 회차만 체크 표시.
+// already(이미 받음)인 회차는 interactive 여부와 무관하게 항상 비활성화한다.
+function renderEpisodes(eps, currentIdx, interactive){
+  var html = '';
+  for (var i = 0; i < eps.length; i++){
+    var e = eps[i];
+    var selectable = (e.decision === 'download') && !e.already;
+    var pages = (e.pages_total ? (e.pages_done + '/' + e.pages_total) : '-');
+    var rowStyle = (i === currentIdx) ? ' style="background:#fff3cd; color:#212529;"' : '';
+    var checked, disabled;
+    if (interactive){
+      disabled = e.already || !selectable;
+      checked = selectable;
+    } else {
+      disabled = true;
+      checked = (e.state !== 'excluded');
+    }
+    var cb = '<input type="checkbox" class="m-ep-check" data-id="' + e.episode_id + '"'
+           + (checked ? ' checked' : '') + (disabled ? ' disabled' : '') + '/>';
+    html += '<div class="row"' + rowStyle + ' style="padding:3px 0; border-bottom:1px solid #eee; align-items:center;">';
+    html += '<div class="col-sm-1" style="text-align:center;">' + cb + '</div>';
+    html += '<div class="col-sm-1" style="text-align:center;">' + (e.episode_id != null ? e.episode_id : '-') + '</div>';
+    html += '<div class="col-sm-3" style="word-break:break-all;"><small>' + esc(e.title || '-')
+          + (e.already ? ' <span class="badge badge-primary">이미받음</span>' : '') + '</small></div>';
+    html += '<div class="col-sm-2" style="text-align:center;">' + decisionBadge(e.decision) + '</div>';
+    html += '<div class="col-sm-3" style="word-break:break-all;"><small>' + esc(e.reason || '-') + '</small></div>';
+    html += '<div class="col-sm-1" style="text-align:center;">' + pages + '</div>';
+    html += '<div class="col-sm-1" style="text-align:center;">' + stateBadge(e.state)
+         + (e.error ? '<br/><small style="color:#c00;">' + esc(e.error) + '</small>' : '') + '</div>';
+    html += '</div>';
+  }
+  document.getElementById('m_episodes').innerHTML = html || '<div style="padding:12px; color:#999;">회차 없음 — 먼저 분석하세요.</div>';
+}
+
+function applyState(st){
+  document.getElementById('m_status').innerText = st.status || '-';
+  document.getElementById('m_message').innerText = st.message || '';
+  document.getElementById('m_series').innerText = st.comic_name || '-';
+  var total = st.total_to_download || 0;
+  var done = (st.completed || 0) + (st.skipped || 0) + (st.failed || 0);
+  document.getElementById('m_total').innerText = total;
+  document.getElementById('m_done').innerText = done;
+  document.getElementById('m_completed').innerText = st.completed || 0;
+  document.getElementById('m_skipped').innerText = st.skipped || 0;
+  document.getElementById('m_failed').innerText = st.failed || 0;
+  var pct = total > 0 ? Math.floor(done * 100 / Math.max(total, 1)) : 0;
+  var bar = document.getElementById('m_progress_bar');
+  bar.style.width = pct + '%';
+  bar.innerText = pct + '%';
+  if (st.status === 'running') bar.classList.add('progress-bar-animated');
+  else bar.classList.remove('progress-bar-animated');
+  // 분석 모드(사용자가 체크 중)면 폴링이 목록을 덮어쓰지 않는다 — 상태/진행 텍스트만 갱신.
+  if (!interactiveMode) {
+    renderEpisodes(st.episodes || [], st.current_index, false);
+  }
+
+  if (st.status === 'running' || st.status === 'analyzing') {
+    if (!pollTimer) pollTimer = setInterval(pollProgress, 1500);
+  } else {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+}
+
+function pollProgress(){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mprogress'},
+         function(data){
+    if (data && data.ret === 'success') applyState(data.state);
+  });
+}
+
+$(document).ready(function(){
+  pollProgress();
+});
+
+function syncCheckAll(){
+  var boxes = $('.m-ep-check:not(:disabled)');
+  var checked = boxes.filter(':checked');
+  $('#m_check_all').prop('checked', boxes.length > 0 && boxes.length === checked.length);
+}
+
+$('body').on('keydown', '#manual_url', function(e){
+  // 입력창에서 Enter → 분석 버튼 클릭과 동일 (한글 IME 조합 중 Enter 는 무시)
+  if (e.which === 13 && !(e.originalEvent && e.originalEvent.isComposing)) {
+    e.preventDefault();
+    $('#manualAnalyzeBtn').click();
+  }
+});
+
+function runAnalyze(url, silentRetry){
+  if (analyzeInFlight) { $.notify('분석이 이미 진행 중입니다 — 완료까지 기다려주세요', {className: 'warn'}); return; }
+  analyzeInFlight = true;
+  $('#manualAnalyzeBtn').prop('disabled', true).text('분석 중...');
+  if (!silentRetry) $.notify('분석 중... 뷰어 진입 시도에 따라 최악 4분 가까이 걸릴 수 있습니다', {className: 'info'});
+  $.ajax({
+    url: '/' + package_name + '/ajax/basic/command',
+    type: 'POST',
+    // manalyze 는 서버에서 뷰어 탐침을 최대 5회(각 15s+30s 타임아웃 + 사이 2s
+    // sleep)까지 동기로 돈다 — nginx 기본 proxy_read_timeout(60s)보다 훨씬
+    // 길 수 있으므로 클라이언트 타임아웃을 넉넉히 잡는다.
+    timeout: 240000,
+    data: {command: 'manalyze', arg1: url, url: url},
+    success: function(data){
+      if (data && data.ret === 'success'){
+        _catalogAutoRetried = false;
+        $('#m_series').text((data.comic && data.comic.title) || '-');
+        $('#m_status').text('분석됨');
+        $('#m_message').text('전체 ' + data.total + '개 / 받기 가능 ' + data.will_download + '개');
+        // 새 분석 결과 — 분석 모드로 전환하고 직전 다운로드의 폴링을 멈춘다.
+        interactiveMode = true;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        renderEpisodes(data.episodes || [], -1, true);
+        syncCheckAll();
+      } else {
+        var msg = (data && data.msg) || '분석 실패';
+        if (!_catalogAutoRetried && /준비 중/.test(msg)) {
+          _catalogAutoRetried = true;
+          $.notify('카탈로그를 처음 받는 중입니다 — 5초 후 자동으로 다시 시도합니다', {className: 'info'});
+          analyzeInFlight = false;
+          $('#manualAnalyzeBtn').prop('disabled', false).text('분석');
+          setTimeout(function(){ runAnalyze(url, true); }, 5000);
+          return;
+        }
+        $.notify(msg, {className: 'error'});
+      }
+    },
+    error: function(xhr){
+      // status 0(연결이 끊김/클라이언트 타임아웃)뿐 아니라 502/504(nginx 가
+      // 백엔드보다 먼저 끊었을 때)도 같은 상황이다 — manalyze 는 서버에서
+      // 최악 233초까지 동기로 돌 수 있는데 nginx 기본 proxy_read_timeout(60초)이
+      // 그보다 짧으면 502/504 로 응답하면서도 백엔드 분석 자체는 계속 진행 중일
+      // 수 있다. 세 코드 모두 같은 안내를 보여준다.
+      if (xhr.status === 0 || xhr.status === 502 || xhr.status === 504) {
+        $.notify('서버 응답이 오래 걸려 연결이 끊겼습니다(프록시 타임아웃일 수 있음). '
+                + '서버에서는 분석이 계속 진행 중일 수 있으니 잠시 후 다시 분석을 눌러보세요.',
+                {className: 'error'});
+      } else {
+        $.notify('서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText, {className: 'error'});
+      }
+    },
+    complete: function(){
+      analyzeInFlight = false;
+      $('#manualAnalyzeBtn').prop('disabled', false).text('분석');
+    }
+  });
+}
+
+$('body').on('click', '#manualAnalyzeBtn', function(e){
+  e.preventDefault();
+  var url = ($('#manual_url').val() || '').trim();
+  if (!url) { $.notify('작품 제목/URL/comic_id/idx 를 입력하세요', {className: 'warn'}); return; }
+  _catalogAutoRetried = false;
+  runAnalyze(url, false);
+});
+
+$('body').on('click', '#manualDownloadBtn', function(e){
+  e.preventDefault();
+  // :not(:disabled) 를 빼먹으면(다른 두 군데 — syncCheckAll/체크전체 토글은
+  // 이미 걸려 있다) F5 새로고침 등으로 interactiveMode=false 상태에서
+  // 렌더된(체크됨+비활성) "이미받음/제외" 행까지 제출 목록에 섞여 들어간다.
+  // 실질 피해는 없다(_download_one 이 DB completed/디스크 아카이브를 보고
+  // 스킵, start_selected 가 범위를 재판정) — 그래도 확인 다이얼로그 개수와
+  // 진행 패널의 허수 스킵을 막기 위해 다른 두 곳과 동일하게 걸러낸다.
+  var ids = $('.m-ep-check:checked:not(:disabled)').map(function(){
+    return $(this).data('id');
+  }).get();
+  if (ids.length === 0) { $.notify('받을 회차를 선택하세요', {className: 'warn'}); return; }
+  if (!confirm(ids.length + '개 회차를 다운로드할까요?')) return;
+  interactiveMode = false;  // 다운 시작 — 이제 폴링이 진행 상태를 그리게 한다.
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mdownload', arg1: ids.join(',')},
+         function(data){
+    if (data && data.ret === 'success'){
+      $.notify(data.msg || '시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+    pollProgress();
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText, {className: 'error'});
+  });
+});
+
+$('body').on('change', '#m_check_all', function(){
+  $('.m-ep-check:not(:disabled)').prop('checked', this.checked);
+});
+
+$('body').on('change', '.m-ep-check', function(){ syncCheckAll(); });
+
+$('body').on('click', '#manualCancelBtn', function(e){
+  e.preventDefault();
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mcancel'},
+         function(data){
+    $.notify('취소 요청', {className: 'info'});
+    pollProgress();
+  });
+});
+</script>
+{% endblock %}

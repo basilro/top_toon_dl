@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE / Agent
+.idea/
+.vscode/
+.claude/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PoC/탐색 산출물 (실수로 다시 생기면 커밋 방지)
+_poc/
+_probe/
+_dump_*/
+_session/
+*.har
+cookies*.json
+browser_cookies.json
+cookie.txt
+cookie*.txt
+
+# 픽스처는 커밋한다 (마스킹 완료, 테스트 재현성 확보)
+!fixtures/
+!fixtures/**
+
+# 리버스 엔지니어링 작업 결과물 (실수로 커밋 방지)
+/js/
+_sample*
+
+# 개인 설정 / 캐시
+config.local.*
+*.local
+
+# 로그
+*.log
+
+# 테스트 / 진단 스크립트 — dev 전용 (배포 repo 에는 안 올림)
+test_*.py
+diagnose_*.py
+
+# 설계/스펙 문서 — 비공개 (배포 repo 에 안 올림. 로컬 이력은 add -f 로 추적)
+docs/
+
+# 유출 추적 모듈 — 비공개(평문 공개 금지, 배포는 .pyf). 검증 도구는 owner 전용.
+trace.py
+tools/trace_verify.py
+tools/trace_keygen.py
+
+# === 암호화 대상 평문 .py (dev 전용, 배포는 .pyf) ===
+client.py
+worker.py
+manual_worker.py
+mod_basic.py
